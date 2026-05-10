@@ -1,0 +1,11 @@
+# requirements_pi.txt
+# =====================
+# Install on the Raspberry Pi (capture device)
+#
+# Usage:
+#   pip install -r requirements_pi.txt
+
+opencv-python-headless==4.9.0.80
+pyserial==3.5
+pynmea2==1.19.0
+smbus2==0.4.3

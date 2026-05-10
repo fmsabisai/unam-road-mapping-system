@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Road Condition Map</title>
+  <link rel="stylesheet"
+        href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    /* ── Layout ─────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { display: flex; height: 100vh; font-family: system-ui, sans-serif;
+           background: #f5f5f0; color: #1a1a1a; }
+    #map  { flex: 1; }
+
+    /* ── Side panel ─────────────────────────────────────────────── */
+    #panel {
+      width: 360px; overflow-y: auto;
+      background: #fff; border-left: 1px solid #e0e0d8;
+      display: flex; flex-direction: column;
+    }
+    #panel-header {
+      padding: 18px 16px 12px;
+      border-bottom: 1px solid #e0e0d8;
+      background: #fff;
+      position: sticky; top: 0; z-index: 10;
+    }
+    #panel-header h1 { font-size: 15px; font-weight: 600; }
+    #panel-header p  { font-size: 12px; color: #888; margin-top: 2px; }
+    #panel-body { padding: 12px 16px; flex: 1; }
+
+    /* ── Legend ─────────────────────────────────────────────────── */
+    .legend { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 10px; }
+    .legend-item { display: flex; align-items: center; gap: 5px;
+                   font-size: 11px; color: #555; }
+    .legend-dot { width: 12px; height: 12px; border-radius: 50%; }
+
+    /* ── Severity tags ──────────────────────────────────────────── */
+    .tag {
+      display: inline-block; padding: 2px 9px; border-radius: 20px;
+      font-size: 11px; font-weight: 600; margin: 2px;
+    }
+    .high   { background: #fee2e2; color: #991b1b; }
+    .medium { background: #fef3c7; color: #92400e; }
+    .low    { background: #dcfce7; color: #166534; }
+
+    /* ── Segment detail ─────────────────────────────────────────── */
+    .section-title {
+      font-size: 12px; font-weight: 600; color: #888;
+      text-transform: uppercase; letter-spacing: 0.05em;
+      margin: 16px 0 8px;
+    }
+    .meta-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+      margin-bottom: 12px;
+    }
+    .meta-item { background: #f8f8f4; border-radius: 8px; padding: 10px; }
+    .meta-item .label { font-size: 11px; color: #888; }
+    .meta-item .value { font-size: 14px; font-weight: 600; margin-top: 2px; }
+
+    /* ── Anomaly cards ──────────────────────────────────────────── */
+    .anomaly-card {
+      border: 1px solid #e8e8e0; border-radius: 10px;
+      padding: 12px; margin: 8px 0;
+    }
+    .anomaly-card .card-header {
+      display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
+    }
+    .anomaly-card h4 { font-size: 13px; font-weight: 600; flex: 1; }
+    .anomaly-card .desc { font-size: 12px; color: #555; line-height: 1.5; }
+    .anomaly-card .value-row {
+      margin-top: 6px; font-size: 11px; color: #888;
+    }
+    .anomaly-card .value-row span { font-weight: 600; color: #333; }
+
+    /* ── Empty state ────────────────────────────────────────────── */
+    .empty { color: #aaa; font-size: 13px; padding: 24px 0; text-align: center; }
+
+    /* ── Loading ────────────────────────────────────────────────── */
+    #loader {
+      position: fixed; inset: 0; background: rgba(255,255,255,.8);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 14px; color: #555; z-index: 9999;
+    }
+  </style>
+</head>
+<body>
+
+<div id="loader">Loading road network …</div>
+<div id="map"></div>
+
+<div id="panel">
+  <div id="panel-header">
+    <h1>Road Condition Map</h1>
+    <p>Click a road segment to inspect anomalies</p>
+    <div class="legend">
+      <div class="legend-item">
+        <div class="legend-dot" style="background:#dc2626"></div> High risk
+      </div>
+      <div class="legend-item">
+        <div class="legend-dot" style="background:#d97706"></div> Medium risk
+      </div>
+      <div class="legend-item">
+        <div class="legend-dot" style="background:#2563eb"></div> No anomalies
+      </div>
+    </div>
+  </div>
+  <div id="panel-body">
+    <div class="empty">Select a road segment on the map.</div>
+  </div>
+</div>
+
+<script>
+// ── Config ─────────────────────────────────────────────────────────────────
+const API = "http://localhost:8000";
+
+// Anomaly type display metadata
+const ANOMALY_META = {
+  pothole_crack:  { icon: "🕳️",  label: "Pothole / crack"      },
+  pothole_impact: { icon: "💥",  label: "Pothole (impact)"      },
+  narrow_road:    { icon: "↔️",  label: "Narrow road"           },
+  low_clearance:  { icon: "🏗️",  label: "Low clearance"         },
+  straight_run:   { icon: "🛣️",  label: "Long straight run"     },
+  dark_zone:      { icon: "🌑",  label: "Dark / unlit zone"     },
+  damaged_sign:   { icon: "🚧",  label: "Damaged sign"          },
+};
+
+function anomalyLabel(type) {
+  return ANOMALY_META[type]?.label || type.replace(/_/g, " ");
+}
+function anomalyIcon(type) {
+  return ANOMALY_META[type]?.icon || "⚠️";
+}
+
+// ── Map initialisation ─────────────────────────────────────────────────────
+const map = L.map("map").setView([-22.5, 17.0], 7);   // centre on Namibia
+
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  attribution: "© OpenStreetMap contributors",
+  maxZoom: 19,
+}).addTo(map);
+
+// ── Segment colour logic ───────────────────────────────────────────────────
+function segmentColor(props) {
+  if (props.high_severity   > 0) return "#dc2626";
+  if (props.total_anomalies > 0) return "#d97706";
+  return "#2563eb";
+}
+
+// ── Segment layer ──────────────────────────────────────────────────────────
+let segmentLayer;
+
+async function loadSegments() {
+  const res  = await fetch(`${API}/segments/geojson`);
+  const data = await res.json();
+
+  segmentLayer = L.geoJSON(data, {
+    style: f => ({
+      color:   segmentColor(f.properties),
+      weight:  5,
+      opacity: 0.8,
+    }),
+    onEachFeature(feature, layer) {
+      layer.on("click", () => showSegment(feature.properties.id, layer));
+      layer.on("mouseover", () => {
+        layer.setStyle({ weight: 9 });
+        layer.bringToFront();
+      });
+      layer.on("mouseout",  () => segmentLayer.resetStyle(layer));
+    },
+  }).addTo(map);
+
+  document.getElementById("loader").style.display = "none";
+
+  // Fit map to data
+  if (segmentLayer.getBounds().isValid()) {
+    map.fitBounds(segmentLayer.getBounds(), { padding: [30, 30] });
+  }
+}
+
+// ── Segment detail panel ───────────────────────────────────────────────────
+let activeLayer = null;
+
+async function showSegment(segmentId, layer) {
+  // Highlight selected segment
+  if (activeLayer) segmentLayer.resetStyle(activeLayer);
+  activeLayer = layer;
+  layer.setStyle({ weight: 9, color: "#7c3aed" });
+
+  const body = document.getElementById("panel-body");
+  body.innerHTML = `<div class="empty">Loading …</div>`;
+
+  const res  = await fetch(`${API}/segment/${segmentId}`);
+  const data = await res.json();
+  const { segment, anomalies, summary } = data;
+
+  const surveyed = segment.surveyed_at
+    ? new Date(segment.surveyed_at).toLocaleDateString()
+    : "—";
+
+  body.innerHTML = `
+    <div class="section-title">Segment #${segment.id}</div>
+    <div class="meta-grid">
+      <div class="meta-item">
+        <div class="label">Road class</div>
+        <div class="value">${segment.road_class || "—"}</div>
+      </div>
+      <div class="meta-item">
+        <div class="label">Length</div>
+        <div class="value">${segment.length_m != null
+          ? (segment.length_m / 1000).toFixed(2) + " km" : "—"}</div>
+      </div>
+      <div class="meta-item">
+        <div class="label">Surface</div>
+        <div class="value">${segment.surface_type || "—"}</div>
+      </div>
+      <div class="meta-item">
+        <div class="label">Surveyed</div>
+        <div class="value">${surveyed}</div>
+      </div>
+    </div>
+
+    <div>
+      <span class="tag high">${summary.high} high</span>
+      <span class="tag medium">${summary.medium} medium</span>
+      <span class="tag low">${summary.low} low</span>
+    </div>
+
+    <div class="section-title">
+      Anomalies (${summary.total})
+    </div>
+
+    ${anomalies.length === 0
+      ? `<div class="empty">No anomalies recorded on this segment.</div>`
+      : anomalies.map(a => `
+        <div class="anomaly-card">
+          <div class="card-header">
+            <span style="font-size:20px">${anomalyIcon(a.anomaly_type)}</span>
+            <h4>${anomalyLabel(a.anomaly_type)}</h4>
+            <span class="tag ${a.severity}">${a.severity}</span>
+          </div>
+          <div class="desc">${a.description || "—"}</div>
+          ${a.value != null ? `
+            <div class="value-row">
+              Measured: <span>${a.value} ${a.unit || ""}</span>
+            </div>` : ""}
+          ${a.recorded_at ? `
+            <div class="value-row">
+              Recorded: <span>${new Date(a.recorded_at).toLocaleString()}</span>
+            </div>` : ""}
+        </div>
+      `).join("")}
+  `;
+}
+
+// ── Click anywhere → nearby anomalies popup ────────────────────────────────
+map.on("click", async e => {
+  const { lat, lng } = e.latlng;
+  const res  = await fetch(
+    `${API}/anomalies/near?lat=${lat}&lon=${lng}&radius_m=100`
+  );
+  const data = await res.json();
+  if (data.count === 0) return;
+
+  const html = data.anomalies.map(a =>
+    `<b>${anomalyIcon(a.anomaly_type)} ${anomalyLabel(a.anomaly_type)}</b>
+     <span style="background:${
+       a.severity === "high" ? "#fee2e2" : a.severity === "medium"
+       ? "#fef3c7" : "#dcfce7"};
+       padding:1px 6px;border-radius:8px;font-size:11px;margin-left:4px">
+       ${a.severity}</span><br/>
+     <span style="font-size:12px;color:#555">${a.description || ""}</span>`
+  ).join("<hr style='margin:6px 0'/>");
+
+  L.popup({ maxWidth: 280 })
+   .setLatLng(e.latlng)
+   .setContent(`<div style="font-size:13px">${html}</div>`)
+   .openOn(map);
+});
+
+// ── Boot ───────────────────────────────────────────────────────────────────
+loadSegments().catch(err => {
+  document.getElementById("loader").textContent =
+    "Could not connect to API. Is the server running?";
+  console.error(err);
+});
+</script>
+</body>
+</html>

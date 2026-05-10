@@ -1,0 +1,26 @@
+# requirements_workstation.txt
+# ==============================
+# Install on the processing workstation / cloud instance
+#
+# Usage:
+#   pip install -r requirements_workstation.txt
+
+# Computer vision & ML
+opencv-python==4.9.0.80
+torch==2.3.0
+torchvision==0.18.0
+scikit-image==0.23.2
+ultralytics==8.2.0          # YOLOv8
+
+# Geospatial
+geojson==3.1.0
+networkx==3.3
+scikit-learn==1.4.2         # BallTree for graph snapping
+
+# API & database
+fastapi==0.111.0
+uvicorn[standard]==0.30.1
+asyncpg==0.29.0
+
+# Utilities
+numpy==1.26.4
